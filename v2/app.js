@@ -1,6 +1,7 @@
 const express = require("express");
 const bodyParser = require("body-parser");
 const mongoose = require("mongoose");
+const _ = require("lodash");
 
 const app = express();
 
@@ -9,154 +10,128 @@ app.set('view engine', 'ejs');
 app.use(bodyParser.urlencoded({ extended: true }));
 app.use(express.static("public"));
 
-mongoose.connect("mongodb://0.0.0.0:27017/todolistDB", { useNewUrlParser: true, useUnifiedTopology: true })
-  .then(() => {
-    console.log("Connected to MongoDB");
-  })
-  .catch(error => {
-    console.error('Error connecting to MongoDB:', error);
-  });
+mongoose.connect("mongodb://0.0.0.0:27017/todolistDB", {
+  useNewUrlParser: true,
+  useUnifiedTopology: true
+});
 
-const itemsSchema = {
+const itemsSchema = new mongoose.Schema({
   name: String
-};
+});
 
 const Item = mongoose.model("Item", itemsSchema);
 
 const item1 = new Item({
-  name: "Welcome to your todo list!"
+  name: "Welcome to your todolist!"
 });
 
 const item2 = new Item({
-  name: "Hello"
+  name: "Hit the + button to add a new item."
 });
 
 const item3 = new Item({
-  name: "Wonder"
+  name: "<-- Hit this to delete an item."
 });
 
 const defaultItems = [item1, item2, item3];
 
-const listSchema = {
-  name:String,
-  items:[itemsSchema]
-};
+const listSchema = new mongoose.Schema({
+  name: String,
+  items: [itemsSchema]
+});
 
-const List = mongoose.model("List",listSchema);
+const List = mongoose.model("List", listSchema);
 
-app.get("/", async function(req, res) {
+app.get("/", async function (req, res) {
   try {
     const foundItems = await Item.find({});
-
     if (foundItems.length === 0) {
-      Item.insertMany(defaultItems)
-        .then(result => {
-          console.log('Default items inserted');
-        })
-        .catch(error => {
-          console.error('Error inserting default items:', error);
-        });
+      await Item.insertMany(defaultItems);
+      console.log("Successfully saved default items to DB.");
       res.redirect("/");
     } else {
       res.render("list", { listTitle: "Today", newListItems: foundItems });
     }
-  } catch (error) {
-    console.error('Error finding items:', error);
-    res.status(500).send('Internal Server Error');
+  } catch (err) {
+    console.log(err);
   }
 });
 
-app.get("/:customListName",function(req,res){
-  const customListName = req.params.customListName;
+app.get("/:customListName", async function (req, res) {
+  const customListName = _.capitalize(req.params.customListName);
 
-  List.findOne({ name: customListName })
-  .then(foundList => {
+  try {
+    const foundList = await List.findOne({ name: customListName });
     if (!foundList) {
-      //create a new list 
+      // Create a new list
       const list = new List({
-        name:customListName,
-        items:defaultItems
+        name: customListName,
+        items: defaultItems
       });
-      list.save()
-      res.redirect("/"+customListName);
+      await list.save();
+      res.redirect("/" + customListName);
     } else {
-     //show a existing list 
-
-     res.render("list",{listTitle:foundList.name, newListItems:foundList.items});
+      // Show an existing list
+      res.render("list", { listTitle: foundList.name, newListItems: foundList.items });
     }
-  })
-  .catch(err => {
-    console.log("An error occurred:", err);
-  });
+  } catch (err) {
+    console.log(err);
+  }
 });
 
-// app.post("/", function(req, res) {
-//   const itemName = req.body.newItem;
-//   const customListName = req.body.List;
-
-//   const item = new Item({
-//     name: itemName
-//   });
-
-//   if (customListName === "Today"){
-//     item.save();
-//     res.redirect("/")
-//   }else{
-//     List.findOne({name:customListName},function(err,foundList){
-//       foundList.items.push(item);
-//       foundList.save();
-//       res.redirect("/"+customListName);
-//     })
-//   }
-// });
-
-app.post("/", async function(req, res) {
+app.post("/", async function (req, res) {
   const itemName = req.body.newItem;
-  const customListName = req.body.list;
+  const listName = req.body.list;
 
   const item = new Item({
     name: itemName
   });
 
-  try {
-    if (customListName === "Today") {
+  if (listName === "Today") {
+    try {
       await item.save();
       res.redirect("/");
-    } else {
-      const foundList = await List.findOne({ name: customListName });
+    } catch (err) {
+      console.log(err);
+    }
+  } else {
+    try {
+      const foundList = await List.findOne({ name: listName });
       foundList.items.push(item);
       await foundList.save();
-      res.redirect("/" + customListName);
+      res.redirect("/" + listName);
+    } catch (err) {
+      console.log(err);
     }
-  } catch (error) {
-    console.error('Error:', error);
-    res.status(500).send('Internal Server Error');
   }
 });
 
-
-app.post("/delete", function(req, res) {
+app.post("/delete", async function (req, res) {
   const checkedItemId = req.body.checkbox;
-  Item.findOneAndRemove({ _id: checkedItemId })
-    .then(() => {
-      console.log("Successfully deleted checked item");
+  const listName = req.body.listName;
+
+  if (listName === "Today") {
+    try {
+      await Item.findByIdAndRemove(checkedItemId);
+      console.log("Successfully deleted checked item.");
       res.redirect("/");
-    })
-    .catch(error => {
-      console.error("Error deleting checked item:", error);
-      res.status(500).send("Internal Server Error");
-    });
+    } catch (err) {
+      console.log(err);
+    }
+  } else {
+    try {
+      await List.findOneAndUpdate({ name: listName }, { $pull: { items: { _id: checkedItemId } } });
+      res.redirect("/" + listName);
+    } catch (err) {
+      console.log(err);
+    }
+  }
 });
 
-
-app.get("/work", function(req, res) {
-  res.render("list", { listTitle: "Work List", newListItems: workItems });
-});
-
-app.get("/about", function(req, res) {
+app.get("/about", function (req, res) {
   res.render("about");
 });
 
-app.listen(3000, function() {
+app.listen(3000, function () {
   console.log("Server started on port 3000");
 });
